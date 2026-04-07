@@ -1,1 +1,1 @@
-# pig_stress_hologenomics
+# Pig stress hologenomics
