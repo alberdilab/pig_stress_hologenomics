@@ -1,0 +1,58 @@
+---
+title: "AlberdiLab | Río-López et al. 2026"
+subtitle: "Study in progress"
+author:
+  - Raquel Río-Lopez, Antton Alberdi
+date: "Last update: `r Sys.Date()`"
+site: bookdown::bookdown_site
+documentclass: book
+bibliography: [book.bib, packages.bib]
+url: https://alberdilab.github.io/pig_stress_hologenomics
+description: |
+  Stress pig hologenomics project
+link-citations: yes
+github-repo: alberdilab/pig_stress_hologenomics
+---
+
+```{r knitr_opts, echo=FALSE}
+knitr::opts_chunk$set(
+    class.source = "script-source",
+    class.output = "script-output",
+    comment = NA)
+```
+
+# Introduction
+
+This webbook contains all the code used for data analysis in study of gut microbiomes of newts across ponds included in a restoration plan.
+
+## Prepare the R environment
+
+### Environment
+
+To reproduce all the analyses locally, clone this repository in your computer using:
+
+```
+RStudio > New Project > Version Control > Git
+```
+
+And indicating the following git repository:
+
+> https://github.com/alberdilab/pig_stress_hologenomics.git
+
+Once the R project has been created, follow the instructions and code chunks shown in this webbook.
+
+### Libraries
+
+The following R packages are required for the data analysis.
+
+```{r load_libraries, warning=FALSE, comments="", message=FALSE}
+# Base
+library(R.utils)
+library(knitr)
+library(tidyverse)
+library(devtools)
+library(tinytable)
+library(rairtable)
+library(janitor)
+library(broom)
+```
