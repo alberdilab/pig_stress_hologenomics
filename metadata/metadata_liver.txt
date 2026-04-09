@@ -1,4 +1,4 @@
-Code Liver	ID_code	ID	Tto	sex	Code_Xavi	Day_sacrif
+sample	ID_code	ID	condition	sex	Code_Xavi	Day_sacrif
 L3	M178	947	control	M	1	10/10/2023
 L4	M191	945	control	M	2	10/10/2023
 L5	F829	943	control	F	3	10/10/2023
