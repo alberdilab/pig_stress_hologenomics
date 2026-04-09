@@ -1,4 +1,0 @@
-introduction
-prepare-the-r-environment
-environment
-libraries
