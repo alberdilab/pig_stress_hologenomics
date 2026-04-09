@@ -55,34 +55,27 @@ library(tinytable)
 library(rairtable)
 library(janitor)
 library(broom)
-
 library(purrr)
 library(dplyr)
 library(tibble)
 library(ggplot2)
-
-if(!requireNamespace("BiocManager", quietly=TRUE))
- + install.packages("BiocManager")
 library(BiocManager)
-BiocManager::install("SummarizedExperiment")
 library(SummarizedExperiment)
-BiocManager::install("edgeR")
 library(edgeR)
-BiocManager::install("limma")
 library(limma)
 
 ```
 
-#Differential Expression Analyses
+# Differential Expression Analyses
 
-##Pre-processing of data
+## Pre-processing of data
 
-###Adapt the format
+### Adapt the format
 
 Define a function that reads and processes RNASeq input files, adapting the format to produce matrices containing only integer count values, with genes as rows and samples as columns (without annotation columns).
 
 
-```{r read_and_adapt_function, warning=FALSE, comments="", message=FALSE}
+```{r read_and_adapt_function, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 
 read_and_adapt <- function(file_path) {
   counts <- read_tsv(file_path, col_names = TRUE)
@@ -96,19 +89,31 @@ read_and_adapt <- function(file_path) {
 ```
 Apply the function to all the tissues (amygdala, cortex, hyppocampus and liver).
 
-```{r read_and_adapt_input_files, warning=FALSE, comments="", message=FALSE}
+```{r read_and_adapt_input_files, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 amygdala_counts <- read_and_adapt("RNASeq_tables/RNASeq_out_Amigdala/salmon.merged.gene_counts.tsv")
 cortex_counts <- read_and_adapt("RNASeq_tables/RNASeq_out_Cortex/salmon.merged.gene_counts.tsv")
 hippocampus_counts <- read_and_adapt("RNASeq_tables/RNASeq_out_Hippocampus/salmon.merged.gene_counts.tsv")
 liver_counts <- read_and_adapt("RNASeq_tables/RNASeq_out_Liver/salmon.merged.gene_counts.tsv")
-head(amygdala_counts)
+
+#Save for later use
+write.table(amygdala_counts, file = "differential_analysis/amygdala_counts.tsv", sep = "\t", quote = FALSE, row.names = TRUE)
+```
+Example of the amygdala count matrix (first 6 rows, first 5 columns):
+
+```{r amygdala_input, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+
+amygdala_counts <- read_tsv("differential_analysis/amygdala_counts.tsv", col_names = TRUE)
+kable(head(amygdala_counts_f[, 1:5]), caption = "First rows and columns of the amygdala count matrix")
+
+
 ```
 
-###Filter low-expressed genes
+
+### Filter low-expressed genes
 
 Keep genes with counts per million (CPM) values greater than one in at least two samples. The counts per million (CPM) value is used instead of the read count to eliminate the deviation caused by different sequencing depths.
 
-```{r filter_function, warning=FALSE, comments="", message=FALSE}
+```{r filter_function, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 
 filter_CPM <- function(counts_matrix, min_cpm = 1, min_samples = 2){
   cpm_values <- cpm(counts_matrix)
@@ -120,18 +125,24 @@ filter_CPM <- function(counts_matrix, min_cpm = 1, min_samples = 2){
 ```
 Apply to all tissues.
 
-```{r filter_tissue_matrices, warning=FALSE, comments="", message=FALSE}
+```{r filter_tissue_matrices, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 amygdala_counts_f <- filter_CPM(amygdala_counts)
 cortex_counts_f   <- filter_CPM(cortex_counts)
 hippocampus_counts_f <- filter_CPM(hippocampus_counts)
 liver_counts_f    <- filter_CPM(liver_counts)
+
+# Save for later use
+saveRDS(amygdala_counts_f, "differential_analysis/limma_voom/amygdala_counts_f.rds")
+saveRDS(cortex_counts_f, "differential_analysis/limma_voom/cortex_counts_f.rds")
+saveRDS(hippocampus_counts_f, "differential_analysis/limma_voom/hippocampus_counts_f.rds")
+saveRDS(liver_counts_f, "differential_analysis/limma_voom/liver_counts_f.rds")
 ```
 
-##Import sample metadata
+## Import sample metadata
 
-Import all the sample information regarding treatment condition, sex and day of sacrifice for all tissues.
+Import all the sample information regarding treatment condition and sex for all tissues.
 
-```{r all_metadata, warning=FALSE, comments="", message=FALSE}
+```{r all_metadata, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 
 #Read metadata
 metadata_amygdala <- read.table("metadata/metadata_amygdala.txt", header = TRUE)
@@ -144,15 +155,22 @@ metadata_liver <- metadata_liver[
   match(colnames(liver_counts), metadata_liver$sample),
 ]
 
-head(metadata_amygdala)
+```
+Example of metadata for amygdala samples.
+
+```{r amygdala_metadata, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+  metadata_amygdala <- read.table("metadata/metadata_amygdala.txt", header = TRUE)
+  kable(head(metadata_amygdala), caption = "First rows of amygdala metadata")
+
 ```
 
 
-##Limma voom
 
-First, we create a function to apply Limma voom analysis to all tissues. In this function, the first step is to create a design matrix specific for Limma voom analysis using a group vector. Then create a DGEList object and normalise the data by the trimmed mean of M-values (TMM) method and apply voom. 
+## Limma voom
 
-```{r limma_voom_function, warning=FALSE, comments="", message=FALSE}
+First, we create a function to apply Limma‑voom analysis to all tissues. In this function, the first step is to create a design matrix specific for Limma‑voom analysis using a group vector. Then we create a DGEList object and normalise the data by the trimmed mean of M‑values (TMM) method. Next, we apply voom, which transforms the count data to log‑counts per million (logCPM) and computes observation‑level weights to account for the mean‑variance relationship typical of RNA‑seq data. After voom, we fit a linear model using lmFit and then apply empirical Bayes moderation with eBayes to obtain moderated t‑statistics, p‑values and false discovery rates (FDR). The function then extracts the results table for the contrast of interest (stress vs. control) using topTable. Based on user‑defined thresholds for log₂ fold change (default 2) and adjusted p‑value (default 0.05), it classifies each gene as up‑regulated, down‑regulated or not significant. Finally, the function returns a list containing the results table, the DGEList object, the voom object, the design matrix and a summary of the number of differentially expressed genes.
+
+```{r limma_voom_function, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 
 run_limma_voom <- function(counts_matrix, metadata, group_col = "condition", covariates = c("sex"), logFC_thresh = 2, pval_thresh = 0.05) {
 
@@ -197,26 +215,76 @@ run_limma_voom <- function(counts_matrix, metadata, group_col = "condition", cov
 
 Apply the function to all the tissues.
 
-```{r limma_voom_tissues, warning=FALSE, comments="", message=FALSE}
+```{r limma_voom_tissues, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 
 #Group data and metadata into lists
 counts_list <- list(amygdala = amygdala_counts_f, cortex = cortex_counts_f, hippocampus = hippocampus_counts_f, liver = liver_counts_f)
-metadata_list <-list(amygdala = metadata_amygdala, cortex = metadata_cortex, hippocampus = metadata_hippocampus, liver = metadata_hippocampus)
+metadata_list <-list(amygdala = metadata_amygdala, cortex = metadata_cortex, hippocampus = metadata_hippocampus, liver = metadata_liver)
 
 #Apply the function to each pair
 limma_results <- map2(counts_list, metadata_list, ~ run_limma_voom(counts_matrix = .x, metadata = .y))
-
-#DEGs summary for each tissue
-map(limma_results, "deg_summary")
 
 #Save result tables
 walk2(limma_results, names(limma_results), ~ write.csv(.x$results, file = file.path("differential_analysis/limma_voom", paste0("result_limma_voom_", .y, ".csv")), row.names = TRUE))
 
 ```
+### Results
+The following tables show the first few lines of the results for each tissue (genes with logFC, p-values, etc.). Full tables are available in the differential_analysis/limma_voom/ folder.
 
-Create a volcano plot function.
+#### Amygdala
+Top 6 rows of limma-voom results for amygdala. 
+```{r limma_voom_amygdala, warning=FALSE, comments="", message=FALSE, echo=FALSE}
 
-```{r limma_voom_volcano, warning=FALSE, comments="", message=FALSE}
+res_amygdala <- read.csv("differential_analysis/limma_voom/result_limma_voom_amygdala.csv", row.names = 1)
+kable(head(res_amygdala), caption = "Limma‑voom results for amygdala (top 6 rows)")
+
+```
+Summary of DEGs in amygdala (up/down/not):
+
+```{r limma_voom_amygdala_sum, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+table(res_amygdala$sig)
+```
+#### Cortex
+Top 6 rows of limma-voom results for cortex. 
+```{r limma_voom_cortex, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+res_cortex <- read.csv("differential_analysis/limma_voom/result_limma_voom_cortex.csv", row.names = 1)
+kable(head(res_cortex), caption = "Limma‑voom results for cortex (top 6 rows)")
+```
+
+Summary of DEGs in cortex (up/down/not):
+
+```{r limma_voom_cortex_sum, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+table(res_cortex$sig)
+```
+#### Hippocampus
+Top 6 rows of limma-voom results for hippocampus. 
+```{r limma_voom_hippocampus, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+res_hippocampus <- read.csv("differential_analysis/limma_voom/result_limma_voom_hippocampus.csv", row.names = 1)
+kable(head(res_hippocampus), caption = "Limma‑voom results for hippocampus (top 6 rows)")
+```
+
+Summary of DEGs in hippocampus (up/down/not):
+```{r limma_voom_hippocampus_sum, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+table(res_hippocampus$sig)
+```
+
+#### Liver
+Top 6 rows of limma-voom results for liver. 
+```{r limma_voom_liver, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+res_liver <- read.csv("differential_analysis/limma_voom/result_limma_voom_liver.csv", row.names = 1)
+kable(head(res_liver), caption = "Limma‑voom results for liver (top 6 rows)")
+```
+
+Summary of DEGs in liver (up/down/not):
+```{r limma_voom_liver_sum, warning=FALSE, comments="", message=FALSE, echo=FALSE}
+table(res_liver$sig)
+```
+
+
+### Volcano plots
+Create volcano plots for each tissue using the volcano_plot function (thresholds: log₂FC > 2, adj.P.Val < 0.05). The plots are saved as PNG and PDF in differential_analysis/limma_voom/volcano_plots/. They are displayed below.
+
+```{r limma_voom_volcano, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 
 # Volcano plot function
 volcano_plot <- function(data, thre_logFC = 2, thre_pval = 0.05) {
@@ -249,7 +317,7 @@ volcano_plot <- function(data, thre_logFC = 2, thre_pval = 0.05) {
 Apply the function to all the tissues and save the plots.
 
 
-```{r limma_voom_volcano_tissues, warning=FALSE, comments="", message=FALSE}
+```{r limma_voom_volcano_tissues, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 #Define output directory
 output_dir <- "differential_analysis/limma_voom"
 volcano_dir <- file.path(output_dir, "volcano_plots")
@@ -269,17 +337,28 @@ walk2(limma_results, names(limma_results), function(res, tissue) {
          plot = p, width = 6, height = 5)
 })
 
-for (tissue in names(limma_results)) {
-  df <- limma_results[[tissue]]$results
-  p <- volcano_plot(df, thre_logFC = 2, thre_pval = 0.05)
-  print(p)
-  cat("\n\n**Volcano plot for", tissue, "tissue**\n\n")
-}
+```
 
+```{r limma_voom_volcano_images, results='asis', echo=FALSE, warning=FALSE}
+tissues <- c("amygdala", "cortex", "hippocampus", "liver")
+for (tissue in tissues) {
+  img_path <- paste0("./differential_analysis/limma_voom/volcano_plots/volcano_", tissue, ".png")
+  if (file.exists(img_path)) {
+    cat(paste0("\n\n**", tools::toTitleCase(tissue), "**\n\n"))
+    cat(paste0("![](./differential_analysis/limma_voom/volcano_plots/volcano_", tissue, ".png)\n\n"))
+  } else {
+    cat(paste0("\n\n**", tools::toTitleCase(tissue), "** – plot not found at: ", img_path, "\n\n"))
+  }
+}
 ```
 
 
-##EdgeR
 
-##DESeq2
+## EdgeR
+Analysis not yet included.
 
+## DESeq2
+Analysis not yed included.
+
+
+ 
