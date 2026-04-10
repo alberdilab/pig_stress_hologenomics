@@ -738,6 +738,10 @@ run_venn <- function(
     grid.newpage()
     grid.draw(venn.plot)
     dev.off()
+    
+    #clean up temporary files
+    tmp_files <- list.files(pattern = "^VennDiagram\\.")
+    if (length(tmp_files) > 0) file.remove(tmp_files)
   }
 }
 ```
