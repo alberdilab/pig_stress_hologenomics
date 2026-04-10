@@ -663,7 +663,7 @@ walk2(DESeq2_results, names(DESeq2_results), function(res, tissue) {
          plot = p, width = 6, height = 5)
 })
 ```
-```{r DESeq2_volcano_images, results='asis', echo=FALSE, warning=FALSE, eval=FALSE}
+```{r DESeq2_volcano_images, results='asis', echo=FALSE, warning=FALSE}
 tissues <- c("amygdala", "cortex", "hippocampus", "liver")
 for (tissue in tissues) {
   img_path <- paste0("./differential_analysis/DESeq2/volcano_plots/volcano_", tissue, ".png")
