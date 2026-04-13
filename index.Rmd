@@ -61,6 +61,7 @@ library(tibble)
 library(ggplot2)
 library(BiocManager)
 library(SummarizedExperiment)
+library(factoextra)
 library(edgeR)
 library(limma)
 library(DESeq2)
@@ -104,9 +105,8 @@ Example of the amygdala count matrix (first 6 rows, first 5 columns):
 
 ```{r amygdala_input, warning=FALSE, comments="", message=FALSE, echo=FALSE}
 amygdala_counts <- read_tsv("differential_analysis/amygdala_counts.tsv", col_names = TRUE)
-kable(head(amygdala_counts_f[, 1:5]), caption = "First rows and columns of the amygdala count matrix")
+kable(head(amygdala_counts[, 1:5]), caption = "First rows and columns of the amygdala count matrix")
 ```
-
 
 ### Filter low-expressed genes
 
@@ -136,7 +136,7 @@ saveRDS(hippocampus_counts_f, "differential_analysis/limma_voom/hippocampus_coun
 saveRDS(liver_counts_f, "differential_analysis/limma_voom/liver_counts_f.rds")
 ```
 
-## Import sample metadata
+### Import sample metadata
 
 Import all the sample information regarding treatment condition and sex for all tissues.
 
@@ -167,6 +167,191 @@ counts_list <- list(amygdala = amygdala_counts_f, cortex = cortex_counts_f, hipp
 metadata_list <-list(amygdala = metadata_amygdala, cortex = metadata_cortex, hippocampus = metadata_hippocampus, liver = metadata_liver)
 ```
 
+### Identify outliers
+
+We applied two different approaches to objectively identify sample outliers in each tissue using Principal Component Analysis (PCA). 
+
+Both methods use the 500 most variable genes, log-transformed counts, and color samples by experimental group (e.g., control or stress). Outliers are highlighted with a different shape and labeled in the plot. Ellipses indicate the 95% confidence region for each group.
+
+#### Euclidean distance to the robust centroid (MAD method)
+
+Samples are considered outliers if their distance to the median sample in PCA space exceeds a threshold based on the median absolute deviation (MAD).
+
+```{r identify_outliers_function, eval=FALSE, warning=FALSE, comments="", message=FALSE}
+
+detect_pca_outliers_euclidean <- function(counts_matrix, metadata, tissue, 
+                                           n_top_genes = 500, n_pcs = 2, mad_thresh = 3, ellipse.level = 0.95,
+                                           group_col = "condition") {
+  # Top 500 most variable genes
+  vars <- apply(counts_matrix, 1, var)
+  top_genes <- names(sort(vars, decreasing = TRUE))[1:min(n_top_genes, length(vars))]
+  log_counts <- log2(counts_matrix[top_genes, ] + 1)
+  
+  # PCA
+  pca <- prcomp(t(log_counts), scale. = TRUE)
+  pc_scores <- pca$x[, 1:n_pcs, drop = FALSE]
+  
+  # Centroide robusto y distancia euclidiana
+  center <- apply(pc_scores, 2, median)
+  dists <- sqrt(rowSums((pc_scores - matrix(center, nrow=nrow(pc_scores), ncol=n_pcs, byrow=TRUE))^2))
+  
+  # Outliers
+  mad_val <- mad(dists)
+  outlier_samples <- names(dists)[dists > median(dists) + mad_thresh * mad_val]
+  
+  # Dataframe
+  pca_df <- data.frame(
+    Sample = rownames(pc_scores),
+    PC1 = pc_scores[,1],
+    PC2 = pc_scores[,2],
+    Outlier = factor(ifelse(rownames(pc_scores) %in% outlier_samples, "Outlier", "Normal"), levels = c("Normal", "Outlier")),
+    Group = as.factor(metadata[match(rownames(pc_scores), metadata$sample), group_col])
+  )
+  
+  # Plot
+  p <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group, shape = Outlier, label = Sample)) +
+    geom_point(size = 3) +
+    stat_ellipse(aes(group = Group, color = Group), level = ellipse.level, linetype = 2) +
+    geom_text(data = subset(pca_df, Outlier == "Outlier"), vjust = -1, size = 3) +
+    labs(title = paste("PCA with Outlier Detection (", tissue, ")", sep = ""),
+         x = "PC1", y = "PC2") +
+    scale_shape_manual(values = c(16, 17)) +
+    theme_bw()
+  
+  return(list(plot = p, outliers = outlier_samples, pca_df = pca_df))
+}
+
+```
+
+Apply to all the tissues:
+
+```{r identify_outliers_tissues, eval=FALSE, warning=FALSE, comments="", message=FALSE}
+results_pca_outliers <- list()
+for (tissue in names(counts_list)) {
+  results_pca_outliers[[tissue]] <- detect_pca_outliers_euclidean(
+    counts_matrix = counts_list[[tissue]],
+    metadata = metadata_list[[tissue]],
+    tissue = tissue
+  )
+  print(results_pca_outliers[[tissue]]$plot)
+  print(results_pca_outliers[[tissue]]$outliers)
+  
+  outlier_dir <- "differential_analysis/outliers"
+  if (!dir.exists(outlier_dir)) {
+  dir.create(outlier_dir, recursive = TRUE)
+  }
+  
+  ggsave(
+    filename = file.path(outlier_dir, paste0("PCA_outliers_MAD_", tissue, ".png")),
+    plot = results_pca_outliers[[tissue]]$plot,
+    width = 6, height = 5, dpi = 300
+  )
+}
+
+```
+
+#### Mahalanobis distance
+
+Samples are considered outliers if their Mahalanobis distance in PCA space corresponds to a p-value below a given threshold, accounting for the covariance structure.
+
+```{r identify_outliers_function_MH, eval=FALSE, warning=FALSE, comments="", message=FALSE}
+detect_pca_outliers_mahalanobis <- function(counts_matrix, metadata, tissue, 
+                                            n_top_genes = 500, n_pcs = 2, pval_thresh = 0.01, ellipse.level = 0.95,
+                                            group_col = "condition") {
+  # Top variable genes
+  vars <- apply(counts_matrix, 1, var)
+  top_genes <- names(sort(vars, decreasing = TRUE))[1:min(n_top_genes, length(vars))]
+  log_counts <- log2(counts_matrix[top_genes, ] + 1)
+  
+  # PCA
+  pca <- prcomp(t(log_counts), scale. = TRUE)
+  pc_scores <- pca$x[, 1:n_pcs, drop = FALSE]
+  
+  # Mahalanobis distance
+  center <- colMeans(pc_scores)
+  covariance <- cov(pc_scores)
+  mahal_dist <- mahalanobis(pc_scores, center, covariance)
+  pvals <- pchisq(mahal_dist, df = n_pcs, lower.tail = FALSE)
+  
+  outlier_samples <- names(pvals)[pvals < pval_thresh]
+  
+  # Dataframe for plotting
+  pca_df <- data.frame(
+    Sample = rownames(pc_scores),
+    PC1 = pc_scores[,1],
+    PC2 = pc_scores[,2],
+    Outlier = factor(ifelse(rownames(pc_scores) %in% outlier_samples, "Outlier", "Normal"), levels = c("Normal", "Outlier")),
+    Group = as.factor(metadata[match(rownames(pc_scores), metadata$sample), group_col]),
+    pval = pvals
+  )
+  
+  # Plot with ggplot2
+  p <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group, shape = Outlier, label = Sample)) +
+    geom_point(size = 3) +
+    stat_ellipse(aes(group = Group, color = Group), level = ellipse.level, linetype = 2) +
+    geom_text(data = subset(pca_df, Outlier == "Outlier"), vjust = -1, size = 3) +
+    labs(title = paste("PCA with Mahalanobis Outlier Detection (", tissue, ")", sep = ""),
+         x = "PC1", y = "PC2") +
+    scale_shape_manual(values = c(16, 17)) +
+    theme_bw()
+  
+  return(list(plot = p, outliers = outlier_samples, pca_df = pca_df))
+}
+```
+
+Apply to all tissues
+
+```{r identify_outliers_tissues_MH, eval=FALSE, warning=FALSE, comments="", message=FALSE}
+results_pca_outliers_mahal <- list()
+for (tissue in names(counts_list)) {
+  results_pca_outliers_mahal[[tissue]] <- detect_pca_outliers_mahalanobis(
+    counts_matrix = counts_list[[tissue]],
+    metadata = metadata_list[[tissue]],
+    tissue = tissue
+  )
+  print(results_pca_outliers_mahal[[tissue]]$plot)
+  print(results_pca_outliers_mahal[[tissue]]$outliers)
+  
+  outlier_dir <- "differential_analysis/outliers"
+  if (!dir.exists(outlier_dir)) {
+  dir.create(outlier_dir, recursive = TRUE)
+  }
+  
+  ggsave(
+    filename = file.path(outlier_dir, paste0("PCA_outliers_MH_", tissue, ".png")),
+    plot = results_pca_outliers_mahal[[tissue]]$plot,
+    width = 6, height = 5, dpi = 300
+  )
+}
+```
+#### PCA plots
+
+PCA outlier plots for each tissue are saved in differential_analysis/outliers/ and displayed below. Outliers are highlighted for each method, enabling objective comparison and selection of outlier samples prior to downstream analysis.
+
+```{r identify_outliers_plots, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+tissues <- names(counts_list)
+methods <- c("MAD", "MH")
+method_names <- c("Euclidean (MAD)", "Mahalanobis")
+
+for (tissue in tissues) {
+  
+  # Título por tejido
+  cat(paste0("\n\n##### ", tools::toTitleCase(tissue), "\n\n"))
+  
+  for (i in seq_along(methods)) {
+    img_path <- file.path(outlier_dir, paste0("PCA_outliers_", methods[i], "_", tissue, ".png"))
+    
+    if (file.exists(img_path)) {
+      cat(paste0(
+        "**", method_names[i], "**\n\n",
+        "![](", img_path, ")\n\n"
+      ))
+    } else {
+      cat(paste0("*Plot not found:* ", img_path, "\n\n"))
+    }
+  }
+}
+```
 
 ## Limma voom
 
@@ -828,6 +1013,7 @@ for (reg in c("up", "down")) {
   }
 }
 ```
+
 #### Liver
 
 ```{r venn_liver, results='asis', echo=FALSE, warning=FALSE}
