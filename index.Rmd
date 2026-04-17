@@ -60,13 +60,22 @@ library(dplyr)
 library(tibble)
 library(ggplot2)
 library(BiocManager)
+library(eulerr)
 library(SummarizedExperiment)
 library(factoextra)
 library(edgeR)
 library(limma)
 library(DESeq2)
-library(VennDiagram)
 library(grid)
+library(msigdbr)
+library(clusterProfiler)
+library(fgsea)
+library(ggplot2)
+library(igraph)
+library(ggraph)
+library(ggridges)
+library(openxlsx)
+
 ```
 
 # Differential Expression Analyses
@@ -191,7 +200,10 @@ detect_pca_outliers_euclidean <- function(counts_matrix, metadata, tissue,
   pca <- prcomp(t(log_counts), scale. = TRUE)
   pc_scores <- pca$x[, 1:n_pcs, drop = FALSE]
   
-  # Centroide robusto y distancia euclidiana
+  # Explained variance
+  var_exp <- summary(pca)$importance[2, 1:2] * 100
+  
+  # Centroid and euclidean distance
   center <- apply(pc_scores, 2, median)
   dists <- sqrt(rowSums((pc_scores - matrix(center, nrow=nrow(pc_scores), ncol=n_pcs, byrow=TRUE))^2))
   
@@ -214,7 +226,8 @@ detect_pca_outliers_euclidean <- function(counts_matrix, metadata, tissue,
     stat_ellipse(aes(group = Group, color = Group), level = ellipse.level, linetype = 2) +
     geom_text(data = subset(pca_df, Outlier == "Outlier"), vjust = -1, size = 3) +
     labs(title = paste("PCA with Outlier Detection (", tissue, ")", sep = ""),
-         x = "PC1", y = "PC2") +
+         x = paste0("PC1 (", round(var_exp[1], 1), "%)"),
+         y = paste0("PC2 (", round(var_exp[2], 1), "%)")) +
     scale_shape_manual(values = c(16, 17)) +
     theme_bw()
   
@@ -267,6 +280,9 @@ detect_pca_outliers_mahalanobis <- function(counts_matrix, metadata, tissue,
   pca <- prcomp(t(log_counts), scale. = TRUE)
   pc_scores <- pca$x[, 1:n_pcs, drop = FALSE]
   
+  # Explained variance
+  var_exp <- summary(pca)$importance[2, 1:2] * 100
+  
   # Mahalanobis distance
   center <- colMeans(pc_scores)
   covariance <- cov(pc_scores)
@@ -291,7 +307,8 @@ detect_pca_outliers_mahalanobis <- function(counts_matrix, metadata, tissue,
     stat_ellipse(aes(group = Group, color = Group), level = ellipse.level, linetype = 2) +
     geom_text(data = subset(pca_df, Outlier == "Outlier"), vjust = -1, size = 3) +
     labs(title = paste("PCA with Mahalanobis Outlier Detection (", tissue, ")", sep = ""),
-         x = "PC1", y = "PC2") +
+         x = paste0("PC1 (", round(var_exp[1], 1), "%)"),
+         y = paste0("PC2 (", round(var_exp[2], 1), "%)")) +
     scale_shape_manual(values = c(16, 17)) +
     theme_bw()
   
@@ -299,7 +316,7 @@ detect_pca_outliers_mahalanobis <- function(counts_matrix, metadata, tissue,
 }
 ```
 
-Apply to all tissues
+Apply to all the tissues:
 
 ```{r identify_outliers_tissues_MH, eval=FALSE, warning=FALSE, comments="", message=FALSE}
 results_pca_outliers_mahal <- list()
@@ -350,6 +367,71 @@ for (tissue in tissues) {
       cat(paste0("*Plot not found:* ", img_path, "\n\n"))
     }
   }
+}
+```
+#### PCA all tissues together
+
+This code combines count matrices from four tissues (amygdala, cortex, hippocampus, liver) using only common genes. It computes log2(CPM+1), selects the top 500 most variable genes, performs PCA with scaling, and plots samples colored by tissue and shaped by condition (stress/control). The axes show the percentage of variance explained. The plot is saved to differential_analysis/outliers/.
+
+```{r all_tissues_pca, eval=FALSE, warning=FALSE, message=FALSE, results='asis'}
+common_genes <- Reduce(intersect, lapply(counts_list, rownames))
+cat("Common genes number:", length(common_genes), "\n")
+
+combined_counts <- do.call(cbind, lapply(counts_list, function(mat) {
+  mat[common_genes, ]
+}))
+
+combined_metadata <- bind_rows(
+  metadata_list$amygdala %>% mutate(tissue = "amygdala"),
+  metadata_list$cortex %>% mutate(tissue = "cortex"),
+  metadata_list$hippocampus %>% mutate(tissue = "hippocampus"),
+  metadata_list$liver %>% mutate(tissue = "liver")
+)
+
+if (!all(colnames(combined_counts) == combined_metadata$sample)) {
+  combined_metadata <- combined_metadata[match(colnames(combined_counts), combined_metadata$sample), ]
+}
+
+cpm_matrix <- cpm(combined_counts, log = FALSE)
+log_cpm <- log2(cpm_matrix + 1)
+
+gene_vars <- apply(log_cpm, 1, var)
+top_genes <- names(sort(gene_vars, decreasing = TRUE))[1:min(500, length(gene_vars))]
+log_cpm_top <- log_cpm[top_genes, ]
+
+pca_result <- prcomp(t(log_cpm_top), scale. = TRUE)
+
+var_exp <- summary(pca_result)$importance[2, 1:2] * 100   # porcentaje PC1 y PC2
+
+pca_df <- as.data.frame(pca_result$x[, 1:2])
+colnames(pca_df) <- c("PC1", "PC2")
+pca_df$sample <- rownames(pca_df)
+pca_df <- merge(pca_df, combined_metadata, by = "sample")
+
+p <- ggplot(pca_df, aes(x = PC1, y = PC2,
+                        color = tissue,
+                        shape = condition)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(aes(group = tissue), linetype = "dashed", level = 0.95, show.legend = FALSE) +
+  labs(
+    title = "PCA: all samples - all tissues",
+    x = paste0("PC1 (", round(var_exp[1], 1), "%)"),
+    y = paste0("PC2 (", round(var_exp[2], 1), "%)")
+  ) +
+  theme_bw() +
+  theme(legend.title = element_blank())
+
+print(p)
+ggsave("differential_analysis/outliers/PCA_all_tissues_condition_shape.png", 
+       plot = p, width = 8, height = 6, dpi = 300)
+```
+
+```{r all_tissues_pca_plot, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+combined_pca_path <- "differential_analysis/outliers/PCA_all_tissues_condition_shape.png"
+if (file.exists(combined_pca_path)) {
+  cat("![](", combined_pca_path, ")\n\n")
+} else {
+  cat("*PCA plot not found. Please run the PCA code first to generate the image.*\n\n")
 }
 ```
 
@@ -880,51 +962,56 @@ run_venn <- function(
   res_DESeq2 <- read.csv(DESeq2_file, row.names = 1)
   
   for (sig_type in c("up", "down")) {
-    # Remove NAs from 'sig' column in each result
-    res_limma_filt  <- res_limma[!is.na(res_limma$sig), ]
-    res_edgeR_filt  <- res_edgeR[!is.na(res_edgeR$sig), ]
-    res_DESeq2_filt <- res_DESeq2[!is.na(res_DESeq2$sig), ]
+  # Remove NAs from 'sig' column in each result
+  res_limma_filt  <- res_limma[!is.na(res_limma$sig), ]
+  res_edgeR_filt  <- res_edgeR[!is.na(res_edgeR$sig), ]
+  res_DESeq2_filt <- res_DESeq2[!is.na(res_DESeq2$sig), ]
     
-    # Extract DEGs for the current type
-    DEGs_limma  <- rownames(res_limma_filt)[res_limma_filt$sig == sig_type]
-    DEGs_edgeR  <- rownames(res_edgeR_filt)[res_edgeR_filt$sig == sig_type]
-    DEGs_DESeq2 <- rownames(res_DESeq2_filt)[res_DESeq2_filt$sig == sig_type]
+  # Extract DEGs for the current type
+  DEGs_limma  <- rownames(res_limma_filt)[res_limma_filt$sig == sig_type]
+  DEGs_edgeR  <- rownames(res_edgeR_filt)[res_edgeR_filt$sig == sig_type]
+  DEGs_DESeq2 <- rownames(res_DESeq2_filt)[res_DESeq2_filt$sig == sig_type]
     
-    # Skip if all sets are empty
-    if (length(DEGs_limma) == 0 & length(DEGs_edgeR) == 0 & length(DEGs_DESeq2) == 0) {
+  # Skip if all sets are empty
+  if (length(DEGs_limma) == 0 & length(DEGs_edgeR) == 0 & length(DEGs_DESeq2) == 0) {
       message(paste("No", sig_type, "genes in any method for", tissue, "- skipping Venn diagram."))
       next
     }
     
-    venn_list <- list(
-      limma = DEGs_limma,
-      edgeR = DEGs_edgeR,
-      DESeq2 = DEGs_DESeq2
+  # Subset list
+  venn_list <- list(
+    limma = DEGs_limma,
+    edgeR = DEGs_edgeR,
+    DESeq2 = DEGs_DESeq2
     )
     
-    main_title <- paste(
-      toupper(substring(sig_type, 1, 1)), substring(sig_type, 2),
-      "-regulated DEGs overlap (", tissue, ")", sep = ""
+  # Adjust Euler model
+  fit <- eulerr::euler(venn_list, shape = "ellipse")
+    
+  # Title and file name
+  main_title <- paste(
+    toupper(substring(sig_type, 1, 1)), substring(sig_type, 2),
+    "-regulated DEGs overlap (", tissue, ")", sep = ""
     )
-    file_name <- paste0("venn_", tolower(tissue), "_", sig_type, ".png")
+  file_name <- paste0("venn_", tolower(tissue), "_", sig_type, ".png")
     output_path <- file.path(output_dir, file_name)
     
-    venn.plot <- venn.diagram(
-      x = venn_list,
-      filename = NULL,
-      fill = c("#FF6666", "#FFFF00", "#993366"),
-      alpha = 0.5,
-      cex = 1.5,
-      cat.cex = 1.5,
-      main = main_title
-    )
+  # plot with euler
+  png(output_path, width = 800, height = 800, res = 120)
+  
+  grid::grid.newpage()  
+  p <- plot(fit,
+        fills = c("#FF6666", "#FFFF00", "#993366"),  
+        alpha = 0.5,                                 
+        labels = list(cex = 1.5),                   
+        quantities = list(cex = 1.2),               
+        main = list(label = main_title, cex = 1.5))
+  
+  grid::grid.draw(p)
+
+  dev.off()
     
-    png(output_path, width=800, height=800, res=120)
-    grid.newpage()
-    grid.draw(venn.plot)
-    dev.off()
-    
-    #clean up temporary files
+  # clean up temporary files
     tmp_files <- list.files(pattern = "^VennDiagram\\.")
     if (length(tmp_files) > 0) file.remove(tmp_files)
   }
@@ -1029,4 +1116,380 @@ for (reg in c("up", "down")) {
   }
 }
 ```
+
+# Gene set enrichment analysis
+
+This section is still under construction.
+
+## Pre-processing
+
+```{r pathway_enrichment_preprocess, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+# Directory configuration and MSigDB preparation for pig
+base_dir <- "differential_analysis"
+out_dir <- "enrichment_analysis"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Get MSigDB datasets for Sus scrofa
+all_gene_sets_pig <- msigdbr(species = "Sus scrofa")
+msigdbr_t2g <- all_gene_sets_pig %>%
+  dplyr::select(gs_name, ensembl_gene) %>%
+  dplyr::distinct()
+
+# Convert to list for fgsea (pathways as gene lists)
+msigdbr_list <- split(msigdbr_t2g$ensembl_gene, msigdbr_t2g$gs_name)
+
+# standardise column names
+
+standardise_de_table <- function(df) {
+  # Convert row names to column if needed
+  if (!"gene_id" %in% colnames(df)) {
+    if (!is.null(rownames(df))) {
+      df <- df %>% tibble::rownames_to_column("gene_id")
+    } else {
+      stop("No row names and no 'gene_id' column")
+    }
+  }
+  
+  # Handle log2FoldChange: if logFC exists and log2FoldChange does NOT, rename
+  if ("logFC" %in% colnames(df) && !"log2FoldChange" %in% colnames(df)) {
+    df <- dplyr::rename(df, log2FoldChange = logFC)
+  } else if ("logFC" %in% colnames(df) && "log2FoldChange" %in% colnames(df)) {
+    # Both exist: keep log2FoldChange, optionally drop logFC to avoid confusion
+    df$logFC <- NULL
+    message("Removed redundant 'logFC' column (keeping 'log2FoldChange')")
+  }
+  
+  # Handle padj: rename FDR or adj.P.Val only if padj does not exist
+  if (!"padj" %in% colnames(df)) {
+    if ("FDR" %in% colnames(df)) {
+      df <- dplyr::rename(df, padj = FDR)
+    } else if ("adj.P.Val" %in% colnames(df)) {
+      df <- dplyr::rename(df, padj = adj.P.Val)
+    } else {
+      stop("No column for adjusted p-value (FDR, adj.P.Val, or padj)")
+    }
+  } else {
+    # If padj exists but also FDR/adj.P.Val, remove the redundant ones
+    if ("FDR" %in% colnames(df)) df$FDR <- NULL
+    if ("adj.P.Val" %in% colnames(df)) df$adj.P.Val <- NULL
+  }
+  
+  # Check essential columns
+  if (!"log2FoldChange" %in% colnames(df)) stop("Missing log2FoldChange column")
+  if (!"padj" %in% colnames(df)) stop("Missing padj column")
+  
+  # Create 'sig' column if missing
+  if (!"sig" %in% colnames(df)) {
+    warning("'sig' column missing. Calculating with |log2FoldChange| > 2 and padj < 0.05")
+    df <- df %>%
+      mutate(sig = case_when(
+        padj < 0.05 & log2FoldChange > 2   ~ "up",
+        padj < 0.05 & log2FoldChange < -2  ~ "down",
+        TRUE ~ "not"
+      ))
+  }
+  
+  # Diagnostic message
+  message(paste("  ->", sum(df$sig == "up"), "up,", sum(df$sig == "down"), "down,", sum(df$sig == "not"), "not"))
+  
+  return(df)
+}
+```
+
+## GSEA function
+
+```{r pathway_enrichment_GSEA, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+run_gsea <- function(de_df, tissue, method, out_dir_base = out_dir, 
+                     nperm = 1000, minSize = 15, maxSize = 500) {
+  de_df <- standardise_de_table(de_df)
+  
+  # Ranking
+  ranking <- de_df$log2FoldChange
+  names(ranking) <- de_df$gene_id
+  names(ranking) <- gsub("\\..*", "", names(ranking))
+  ranking <- ranking[is.finite(ranking) & !is.na(ranking)]
+  ranking <- ranking[!duplicated(names(ranking))]
+  ranking <- sort(ranking, decreasing = TRUE)
+  
+  # Filter genes in MSigDB
+  genes_in_msigdb <- intersect(names(ranking), unique(msigdbr_t2g$ensembl_gene))
+  ranking <- ranking[genes_in_msigdb]
+  
+  # Clean pathways
+  pathways_clean <- list()
+  for (p in names(msigdbr_list)) {
+    genes_p <- as.character(msigdbr_list[[p]])
+    genes_p <- intersect(genes_p, names(ranking))
+    if (length(genes_p) >= minSize && length(genes_p) <= maxSize) {
+      pathways_clean[[p]] <- genes_p
+    }
+  }
+  
+  if (length(ranking) == 0) stop("No genes in ranking in MSigDB.")
+  if (length(pathways_clean) == 0) stop("No pathways meet size criteria.")
+  
+  cat(paste("Running GSEA for", tissue, method, "-", length(ranking), "genes,", length(pathways_clean), "pathways\n"))
+  
+  set.seed(123)
+  fgsea_res <- tryCatch({
+    fgsea(pathways = pathways_clean, stats = ranking,
+          minSize = minSize, maxSize = maxSize, nperm = nperm)
+  }, error = function(e) {
+    cat(paste("Error in fgsea:", e$message, "\n"))
+    return(NULL)
+  })
+  if (is.null(fgsea_res)) return(NULL)
+  
+  fgsea_res <- fgsea_res[order(padj), ]
+  
+  # Create directory
+  gsea_out <- file.path(out_dir_base, "GSEA", method, tissue)
+  dir.create(gsea_out, recursive = TRUE, showWarnings = FALSE)
+  
+  # Save CSV
+  fgsea_res_df <- as.data.frame(fgsea_res)
+  fgsea_res_df$leading_genes <- sapply(fgsea_res$leadingEdge, paste, collapse = ";")
+  fgsea_res_df$leadingEdge <- NULL
+  write.csv(fgsea_res_df, file = file.path(gsea_out, "GSEA_results.csv"), row.names = FALSE)
+  
+  # Save object (including ranking and pathways_clean)
+  full_obj <- list(
+    fgsea_res = fgsea_res,
+    ranking = ranking,
+    pathways_clean = pathways_clean,
+    params = list(tissue = tissue, method = method, nperm = nperm, minSize = minSize, maxSize = maxSize)
+  )
+  saveRDS(full_obj, file = file.path(gsea_out, "GSEA_full.rds"))
+  
+  return(fgsea_res)
+}
+```
+
+Create a function to apply run_gsea to all the tissues and methods:
+
+```{r pathway_enrichment_GSEA_tissues, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+# Function to run GSEA over all tissues and methods
+process_all_gsea <- function(base_dir = "differential_analysis",
+                             nperm = 1000, minSize = 15, maxSize = 500) {
+  methods <- c("limma_voom", "edgeR", "DESeq2")
+  tissues <- c("amygdala", "cortex", "hippocampus", "liver")
+  
+  for (method in methods) {
+    method_dir <- file.path(base_dir, method)
+    if (!dir.exists(method_dir)) {
+      warning(paste("Folder does not exist for", method, "- skipping"))
+      next
+    }
+    for (tissue in tissues) {
+      file_name <- paste0("result_", method, "_", tissue, ".csv")
+      file_path <- file.path(method_dir, file_name)
+      if (!file.exists(file_path)) {
+        warning(paste("Not found", file_path, "- skipping"))
+        next
+      }
+      de_df <- read.csv(file_path, row.names = 1)
+      cat(paste("\n========================================\n"))
+      cat(paste("Running GSEA for:", method, "-", tissue, "\n"))
+      cat(paste("File:", file_path, "\n"))
+      
+      tryCatch({
+        run_gsea(de_df, tissue, method, nperm = nperm, 
+                 minSize = minSize, maxSize = maxSize)
+      }, error = function(e) {
+        cat(paste("GSEA error for", method, tissue, ":", e$message, "\n"))
+      })
+    }
+  }
+}
+```
+
+
+Then apply the function to all the tissues and methods:
+
+```{r pathway_enrichment_GSEA_run, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+# Run all the analyses
+process_all_gsea(base_dir = "differential_analysis", nperm = 1000)
+```
+
+
+## Enrichment plots function
+
+```{r pathway_enrichment_GSEA_plots, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+generate_gsea_plots <- function(gsea_rds_path, out_dir = NULL, 
+                                p_thresh = 0.1, top_n = 20, jaccard_thresh = 0.2) {
+  # Read saved object
+  full <- readRDS(gsea_rds_path)
+  fgsea_res <- full$fgsea_res
+  ranking <- full$ranking
+  pathways_clean <- full$pathways_clean
+  
+  # If out_dir is not specified, use the same directory as the RDS
+  if (is.null(out_dir)) out_dir <- dirname(gsea_rds_path)
+  
+  tissue <- full$params$tissue
+  method <- full$params$method
+  
+  # Dotplot
+  top_paths <- fgsea_res %>% filter(padj < p_thresh) %>% head(top_n)
+  if (nrow(top_paths) > 0) {
+    top_paths <- top_paths %>% mutate(direction = ifelse(NES > 0, "Stress", "Control"))
+    p_dot <- ggplot(top_paths, aes(x = reorder(pathway, NES), y = NES, 
+                                   color = direction, size = -log10(padj))) +
+      geom_point() + coord_flip() +
+      scale_color_manual(values = c("Stress" = "red", "Control" = "blue")) +
+      labs(x = "", y = "NES", title = paste(method, tissue, "- Dotplot")) +
+      theme_bw() + theme(axis.text.y = element_text(size = 8))
+    ggsave(file.path(out_dir, "dotplot.png"), p_dot, width = 10, height = 8, dpi = 300)
+    ggsave(file.path(out_dir, "dotplot.pdf"), p_dot, width = 10, height = 8)
+  }
+  
+  # Enrichment Map
+  df_sig <- fgsea_res %>% filter(padj < p_thresh)
+  if (nrow(df_sig) >= 2) {
+    gene_lists <- df_sig$leadingEdge
+    names(gene_lists) <- df_sig$pathway
+    n <- length(gene_lists)
+    adj_mat <- matrix(0, n, n, dimnames = list(names(gene_lists), names(gene_lists)))
+    for (i in 1:(n-1)) {
+      for (j in (i+1):n) {
+        inter <- length(intersect(gene_lists[[i]], gene_lists[[j]]))
+        union <- length(union(gene_lists[[i]], gene_lists[[j]]))
+        jacc <- inter / union
+        if (jacc > jaccard_thresh) adj_mat[i,j] <- adj_mat[j,i] <- jacc
+      }
+    }
+    g <- igraph::graph_from_adjacency_matrix(adj_mat, weighted = TRUE, mode = "undirected", diag = FALSE)
+    if (igraph::vcount(g) > 0) {
+      igraph::V(g)$NES <- df_sig$NES[match(igraph::V(g)$name, df_sig$pathway)]
+      igraph::V(g)$direction <- ifelse(igraph::V(g)$NES > 0, "Stress", "Control")
+      p_map <- ggraph::ggraph(g, layout = "fr") +
+        ggraph::geom_edge_link(aes(width = weight), alpha = 0.4, color = "gray50") +
+        ggraph::geom_node_point(aes(color = direction, size = abs(NES))) +
+        ggraph::geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+        scale_color_manual(values = c("Stress" = "red", "Control" = "blue")) +
+        theme_void() + labs(title = paste(method, tissue, "- Enrichment Map"))
+      ggsave(file.path(out_dir, "enrichment_map.png"), p_map, width = 12, height = 10, dpi = 300)
+      ggsave(file.path(out_dir, "enrichment_map.pdf"), p_map, width = 12, height = 10)
+    }
+  }
+  
+  # Ridgeplot
+  sig_pos <- fgsea_res %>% filter(padj < p_thresh, NES > 0) %>% head(3)
+  sig_neg <- fgsea_res %>% filter(padj < p_thresh, NES < 0) %>% head(3)
+  sig_paths <- bind_rows(sig_pos, sig_neg)
+  if (nrow(sig_paths) > 0) {
+    ridge_data <- list()
+    for (i in 1:nrow(sig_paths)) {
+      genes <- sig_paths$leadingEdge[[i]]
+      logfc_vals <- ranking[genes]
+      ridge_data[[i]] <- data.frame(
+        pathway = sig_paths$pathway[i],
+        log2FC = logfc_vals,
+        direction = ifelse(sig_paths$NES[i] > 0, "Stress", "Control")
+      )
+    }
+    ridge_df <- do.call(rbind, ridge_data)
+    ridge_df$pathway <- factor(ridge_df$pathway, levels = sig_paths$pathway)
+    p_ridge <- ggplot(ridge_df, aes(x = log2FC, y = pathway, fill = after_stat(x))) +
+      ggridges::geom_density_ridges_gradient() +
+      scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+      labs(x = "log2FC (Stress vs Control)", y = "", title = paste(method, tissue, "- Core genes distribution")) +
+      theme_bw()
+    ggsave(file.path(out_dir, "ridgeplot.png"), p_ridge, width = 10, height = 8, dpi = 300)
+    ggsave(file.path(out_dir, "ridgeplot.pdf"), p_ridge, width = 10, height = 8)
+  }
+  
+  message(paste("Plots saved in", out_dir))
+}
+```
+
+
+## Iterate function over tissues and methods
+
+```{r pathway_enrichment_GSEA_iterate, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+# Function to iterate over results and methods
+plot_all_gsea <- function(base_dir = "enrichment_analysis/GSEA",
+                          methods = c("limma_voom", "edgeR", "DESeq2"),
+                          tissues = c("amygdala", "cortex", "hippocampus", "liver"),
+                          p_thresh = 0.1, top_n = 20, jaccard_thresh = 0.2) {
+  for (method in methods) {
+    for (tissue in tissues) {
+      rds_path <- file.path(base_dir, method, tissue, "GSEA_full.rds")
+      if (!file.exists(rds_path)) {
+        warning(paste("Missing", rds_path, "- skipping"))
+        next
+      }
+      cat(paste("Generating plots for", method, tissue, "...\n"))
+      generate_gsea_plots(rds_path, 
+                          p_thresh = p_thresh, 
+                          top_n = top_n, 
+                          jaccard_thresh = jaccard_thresh)
+    }
+  }
+}
+```
+
+Then create all the plots for every tissue and method.
+```{r pathway_enrichment_GSEA_plot_all, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+# Plot all the analyses
+plot_all_gsea(p_thresh = 0.05, top_n = 30, jaccard_thresh = 0.3)
+```
+
+## Plots
+
+I'm working on it*
+
+## Save GSEA results as Excel
+
+```{r pathway_enrichment_excel, warning=FALSE, comments="", message=FALSE, eval=FALSE}
+
+methods <- c("limma_voom", "edgeR", "DESeq2")
+tissues <- c("amygdala", "cortex", "hippocampus", "liver")
+sheets <- list()
+
+for (method in methods) {
+  for (tissue in tissues) {
+    file_path <- file.path("enrichment_analysis/GSEA", method, tissue, "GSEA_results.csv")
+    if (file.exists(file_path)) {
+      df <- read.csv(file_path)
+      df <- df %>%
+        mutate(Direction = ifelse(NES > 0, "Stress", "Control"))
+      sheet_name <- paste0(method, "_", tissue)
+      if (nchar(sheet_name) > 31) sheet_name <- substr(sheet_name, 1, 31)
+      
+      sheets[[sheet_name]] <- df
+    } else {
+      warning(paste("File not found:", file_path))
+    }
+  }
+}
+
+summary_df <- data.frame()
+for (method in methods) {
+  for (tissue in tissues) {
+    file_path <- file.path("enrichment_analysis/GSEA", method, tissue, "GSEA_results.csv")
+    if (file.exists(file_path)) {
+      df <- read.csv(file_path)
+      n_sig <- sum(df$padj < 0.05, na.rm = TRUE)
+      n_up <- sum(df$padj < 0.05 & df$NES > 0, na.rm = TRUE)
+      n_down <- sum(df$padj < 0.05 & df$NES < 0, na.rm = TRUE)
+      summary_df <- rbind(summary_df, data.frame(
+        Method = method,
+        Tissue = tissue,
+        Significant_pathways = n_sig,
+        Up_in_Stress = n_up,
+        Down_in_Stress = n_down
+      ))
+    }
+  }
+}
+sheets[["Summary"]] <- summary_df
+
+output_file <- "enrichment_analysis/GSEA_all_results.xlsx"
+write.xlsx(sheets, file = output_file, overwrite = TRUE)
+
+cat(paste("\nExcel file saved:", output_file, "\n"))
+cat("It contains one sheet for each tissue-method combination plus one summary sheet.\n")
+```
+
 

@@ -45,3 +45,10 @@ amygdala-4
 cortex-4
 hippocampus-4
 liver-4
+gene-set-enrichment-analysis
+pre-processing
+gsea-function
+enrichment-plots-function
+iterate-function-over-tissues-and-methods
+plots
+save-gsea-results-as-excel

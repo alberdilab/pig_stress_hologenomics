@@ -2022,6 +2022,15 @@ div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
 <li class="chapter" data-level="2.5.1" data-path="differential-expression-analyses.html"><a href="differential-expression-analyses.html#venn-diagram-plots"><i class="fa fa-check"></i><b>2.5.1</b> Venn diagram plots</a></li>
 </ul></li>
 </ul></li>
+<li class="chapter" data-level="3" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html"><i class="fa fa-check"></i><b>3</b> Gene set enrichment analysis</a>
+<ul>
+<li class="chapter" data-level="3.1" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html#pre-processing"><i class="fa fa-check"></i><b>3.1</b> Pre-processing</a></li>
+<li class="chapter" data-level="3.2" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html#gsea-function"><i class="fa fa-check"></i><b>3.2</b> GSEA function</a></li>
+<li class="chapter" data-level="3.3" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html#enrichment-plots-function"><i class="fa fa-check"></i><b>3.3</b> Enrichment plots function</a></li>
+<li class="chapter" data-level="3.4" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html#iterate-function-over-tissues-and-methods"><i class="fa fa-check"></i><b>3.4</b> Iterate function over tissues and methods</a></li>
+<li class="chapter" data-level="3.5" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html#plots"><i class="fa fa-check"></i><b>3.5</b> Plots</a></li>
+<li class="chapter" data-level="3.6" data-path="gene-set-enrichment-analysis.html"><a href="gene-set-enrichment-analysis.html#save-gsea-results-as-excel"><i class="fa fa-check"></i><b>3.6</b> Save GSEA results as Excel</a></li>
+</ul></li>
 <li class="divider"></li>
 <li><a href="https://www.alberdilab.dk" target="blank"><b>www.alberdilab.dk</b></a></li>
 <li><a href="https://www.earthhologenome.org" target="blank"><b>www.earthhologenome.org</b></a></li>
@@ -2048,7 +2057,7 @@ div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
 <h1 class="title">AlberdiLab | Río-López et al. 2026</h1>
 <h2 class="subtitle"><em>Study in progress</em></h2>
 <p class="author"><em>Raquel Río-Lopez, Antton Alberdi</em></p>
-<p class="date"><em>Last update: 2026-04-13</em></p>
+<p class="date"><em>Last update: 2026-04-17</em></p>
 </div>
 <div id="introduction" class="section level1 hasAnchor" number="1">
 <h1><span class="header-section-number">Chapter 1</span> Introduction<a href="index.html#introduction" class="anchor-section" aria-label="Anchor link to header"></a></h1>
@@ -2082,13 +2091,21 @@ div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
 <span id="cb2-12"><a href="index.html#cb2-12" tabindex="-1"></a><span class="fu">library</span>(tibble)</span>
 <span id="cb2-13"><a href="index.html#cb2-13" tabindex="-1"></a><span class="fu">library</span>(ggplot2)</span>
 <span id="cb2-14"><a href="index.html#cb2-14" tabindex="-1"></a><span class="fu">library</span>(BiocManager)</span>
-<span id="cb2-15"><a href="index.html#cb2-15" tabindex="-1"></a><span class="fu">library</span>(SummarizedExperiment)</span>
-<span id="cb2-16"><a href="index.html#cb2-16" tabindex="-1"></a><span class="fu">library</span>(factoextra)</span>
-<span id="cb2-17"><a href="index.html#cb2-17" tabindex="-1"></a><span class="fu">library</span>(edgeR)</span>
-<span id="cb2-18"><a href="index.html#cb2-18" tabindex="-1"></a><span class="fu">library</span>(limma)</span>
-<span id="cb2-19"><a href="index.html#cb2-19" tabindex="-1"></a><span class="fu">library</span>(DESeq2)</span>
-<span id="cb2-20"><a href="index.html#cb2-20" tabindex="-1"></a><span class="fu">library</span>(VennDiagram)</span>
-<span id="cb2-21"><a href="index.html#cb2-21" tabindex="-1"></a><span class="fu">library</span>(grid)</span></code></pre></div>
+<span id="cb2-15"><a href="index.html#cb2-15" tabindex="-1"></a><span class="fu">library</span>(eulerr)</span>
+<span id="cb2-16"><a href="index.html#cb2-16" tabindex="-1"></a><span class="fu">library</span>(SummarizedExperiment)</span>
+<span id="cb2-17"><a href="index.html#cb2-17" tabindex="-1"></a><span class="fu">library</span>(factoextra)</span>
+<span id="cb2-18"><a href="index.html#cb2-18" tabindex="-1"></a><span class="fu">library</span>(edgeR)</span>
+<span id="cb2-19"><a href="index.html#cb2-19" tabindex="-1"></a><span class="fu">library</span>(limma)</span>
+<span id="cb2-20"><a href="index.html#cb2-20" tabindex="-1"></a><span class="fu">library</span>(DESeq2)</span>
+<span id="cb2-21"><a href="index.html#cb2-21" tabindex="-1"></a><span class="fu">library</span>(grid)</span>
+<span id="cb2-22"><a href="index.html#cb2-22" tabindex="-1"></a><span class="fu">library</span>(msigdbr)</span>
+<span id="cb2-23"><a href="index.html#cb2-23" tabindex="-1"></a><span class="fu">library</span>(clusterProfiler)</span>
+<span id="cb2-24"><a href="index.html#cb2-24" tabindex="-1"></a><span class="fu">library</span>(fgsea)</span>
+<span id="cb2-25"><a href="index.html#cb2-25" tabindex="-1"></a><span class="fu">library</span>(ggplot2)</span>
+<span id="cb2-26"><a href="index.html#cb2-26" tabindex="-1"></a><span class="fu">library</span>(igraph)</span>
+<span id="cb2-27"><a href="index.html#cb2-27" tabindex="-1"></a><span class="fu">library</span>(ggraph)</span>
+<span id="cb2-28"><a href="index.html#cb2-28" tabindex="-1"></a><span class="fu">library</span>(ggridges)</span>
+<span id="cb2-29"><a href="index.html#cb2-29" tabindex="-1"></a><span class="fu">library</span>(openxlsx)</span></code></pre></div>
 </div>
 </div>
 </div>
